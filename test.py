@@ -29,7 +29,7 @@ REWARD_MAP = {
 
 def env(render_mode=None):
     """
-    The env function often wraps the environment in wrappers by default.
+    The dag_config.json function often wraps the environment in wrappers by default.
     You can find full documentation for these methods
     elsewhere in the developer documentation.
     """

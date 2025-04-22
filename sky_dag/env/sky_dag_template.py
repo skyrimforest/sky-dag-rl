@@ -1,9 +1,9 @@
 from pettingzoo import ParallelEnv
 
 
-class CustomEnvironment(ParallelEnv):
+class SkyDagEnvironment(ParallelEnv):
     metadata = {
-        "name": "custom_environment_v0",
+        "name": "sky_dag_v0",
     }
 
     def __init__(self):
