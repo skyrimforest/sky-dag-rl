@@ -1,30 +1,36 @@
+
 class Node:
-    def __init__(self, name, position, speed):
-        self.name = name
+    def __init__(self, node_id, position, cpu_capacity, mem_capacity):
+        self.id = node_id
         self.position = position
-        self.speed = speed
-        self.state = 'idle'
-        self.progress = 0.0
-        self.successors = []
+        self.cpu_capacity = cpu_capacity
+        self.mem_capacity = mem_capacity
+        self.running_operations = []
+        self.connections = []  # Underlay: 连接到的其他 Node，带传输延迟
 
     def connect_to(self, other_node, delay=1):
-        self.successors.append(Edge(other_node, delay))
+        self.connections.append({"target": other_node, "delay": delay})
 
-    def start(self):
-        if self.state == 'idle':
-            self.state = 'running'
+    def can_run(self, op):
+        used_cpu = sum(o.cpu_req for o in self.running_operations)
+        used_mem = sum(o.mem_req for o in self.running_operations)
+        return (used_cpu + op.cpu_req <= self.cpu_capacity and
+                used_mem + op.mem_req <= self.mem_capacity)
+
+    def assign_operation(self, op):
+        if self.can_run(op):
+            op.assign_to_node(self)
+            self.running_operations.append(op)
+            return True
+        return False
 
     def step(self):
-        triggered = []
-        if self.state == 'running':
-            self.progress += self.speed
-            if self.progress >= 1.0:
-                self.state = 'finished'
-                triggered = self.successors
-        return triggered
-
-
-class Edge:
-    def __init__(self, target_node, delay):
-        self.target_node = target_node
-        self.delay = delay
+        finished_ops = []
+        for op in self.running_operations:
+            op.step()
+            if op.state == "finished":
+                finished_ops.append(op)
+        self.running_operations = [
+            op for op in self.running_operations if op.state != "finished"
+        ]
+        return finished_ops
