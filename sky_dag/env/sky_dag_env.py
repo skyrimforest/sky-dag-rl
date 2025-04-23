@@ -9,6 +9,8 @@ from Job import Job
 from Operation import Operation
 import json
 from scheduler import RandomScheduler
+from sky_dag.env.scheduler import *
+
 
 class SkyDagEnv(ParallelEnv):
     metadata = {"render_modes": ["human"], "name": "sky_dag_env"}
@@ -40,7 +42,7 @@ class SkyDagEnv(ParallelEnv):
         self.overlay_agents=None
 
         # 获得指派策略
-        self.scheduler = RandomScheduler()  # 默认调度器，可替换
+        self.scheduler = FixedScheduler()  # 默认调度器，可替换
 
     def set_scheduler(self, scheduler):
         """
@@ -149,46 +151,53 @@ class SkyDagEnv(ParallelEnv):
         self.step_count = 0
 
         # 根据需要选择调度器，默认使用随机调度器
-        self.scheduler = RandomScheduler()
+        self.scheduler = FixedScheduler()
 
         # 如果需要自定义调度器，可以使用 set_scheduler
         # self.set_scheduler(CustomScheduler())
 
         print("Environment Initialized Successfully.")
 
-    def step(self, actions):
+    def step(self, actions=None):
         """
-        进行一步操作
-        :param actions:采取的动作
-        :return: 返回运行的状态obs, 奖励rewards, 是否结束terminations, 是否截断truncations, 其他信息infos
+        执行一步仿真逻辑。当前版本为纯仿真环境，不包含 agent 与动作，op 自动分配到 node 上执行。
+        :param actions: None（非 RL 模式）
+        :return: obs, rewards, terminations, truncations, infos
         """
         rewards = {}
         terminations = {}
         truncations = {}
         infos = {}
 
-        for op in self.pending_operations[:]:
+        # === 1. 分配待调度的操作到可用节点 ===
+        for op in self.pending_operations[:]:  # 拷贝列表避免循环中修改
             for node in self.nodes.values():
-                if node.assign_operation(op):
+                if node.assign_operation(op):  # 成功分配则移除
                     self.pending_operations.remove(op)
                     break
 
+        # === 2. 推进每个节点上的操作执行 ===
         for node in self.nodes.values():
-            finished_ops = node.step()
+            finished_ops = node.step()  # 返回已完成的操作列表
+
             for op in finished_ops:
+                # 更新其后继操作的依赖状态
                 for next_op in op.successors:
                     next_op.mark_dependency_finished(op.id)
-                if next_op.is_ready():
-                    self.pending_operations.append(next_op)
+                    # 若下一个操作就绪则加入待调度队列
+                    if next_op.is_ready():
+                        self.pending_operations.append(next_op)
 
+        # === 3. 步数更新 ===
         self.step_count += 1
+
+        # === 4. 构造返回值 ===
         obs = self._get_obs()
-        for name in self.agents:
-            node = self.nodes[name]
-            rewards[name] = 0.0  # 可定制
-            terminations[name] = False  # 暂不终止
-            truncations[name] = False
-            infos[name] = {}
+        for agent in self.agents:
+            rewards[agent] = 0.0  # 你可以根据实际逻辑修改为奖励函数
+            terminations[agent] = self._check_done(agent)  # 可选：某个 node 完成所有任务
+            truncations[agent] = False  # 暂无截断逻辑
+            infos[agent] = {}
 
         return obs, rewards, terminations, truncations, infos
 
