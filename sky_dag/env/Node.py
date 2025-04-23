@@ -1,4 +1,3 @@
-
 class Node:
     def __init__(self, node_id, position, cpu_capacity, mem_capacity):
         self.id = node_id
@@ -24,7 +23,19 @@ class Node:
             return True
         return False
 
+    # ----------正常运行阶段----------
+    def monitor(self):
+        """
+        监控资源
+        :return:
+        """
+        pass
+
     def step(self):
+        """
+        单步运行
+        :return:
+        """
         finished_ops = []
         for op in self.running_operations:
             op.step()
@@ -34,3 +45,18 @@ class Node:
             op for op in self.running_operations if op.state != "finished"
         ]
         return finished_ops
+
+    # ----------重调度阶段----------
+    def available(self):
+        """
+        给出当前的可用资源
+        :return:
+        """
+        pass
+
+    def preempt(self):
+        """
+        抢占当前的物理机
+        :return:
+        """
+        pass

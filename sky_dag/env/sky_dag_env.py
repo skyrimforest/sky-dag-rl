@@ -33,6 +33,12 @@ class SkyDagEnv(ParallelEnv):
         self.load_node_graph()
         self.load_job_graph()
 
+        # 智能体
+        self.operation_agents=[]
+        self.node_agents=[]
+        self.under_agents=None
+        self.overlay_agents=None
+
         # 获得指派策略
         self.scheduler = RandomScheduler()  # 默认调度器，可替换
 

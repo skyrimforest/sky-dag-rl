@@ -18,10 +18,10 @@ BLUE = (0, 100, 255)
 ORANGE = (255, 165, 0)
 RED = (200, 0, 0)
 
-# 状态颜色映射
+# Node的状态颜色映射
 STATE_COLOR = {
-    "pending": GRAY,
-    "scheduled":BLUE,
+    "free": GRAY,
+    "pending":BLUE,
     "running": ORANGE,
     "finished": GREEN,
     "failed": RED,

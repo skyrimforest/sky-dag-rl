@@ -15,12 +15,54 @@ class Operation:
     def is_ready(self):
         return all(dep.state == "finished" for dep in self.dependencies)
 
-    def assign_to_node(self, node):
-        self.assigned_node = node
-        self.state = "running"
+    # ----------正常运行阶段----------
+    def progress(self):
+        """
+        执行相关的操作
+        :return:
+        """
+        pass
 
     def step(self):
         if self.state == "running":
             self.progress += 1.0 / self.duration
             if self.progress >= 1.0:
                 self.state = "finished"
+
+    def check_dependencies(self):
+        """
+        判断前置条件是否满足
+        :return:
+        """
+        pass
+
+    def cal_qos(self):
+        """
+        查看运行质量
+        :return:
+        """
+        pass
+
+    # ----------重调度阶段----------
+    def request(self):
+        """
+        请求资源
+        :return:
+        """
+        pass
+
+    def choose(self):
+        """
+        进行物理机的选择
+        :return:
+        """
+        pass
+
+    def assign_to_node(self, node):
+        """
+        分配到节点上
+        :param node:
+        :return:
+        """
+        self.assigned_node = node
+        self.state = "running"

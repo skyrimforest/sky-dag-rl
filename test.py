@@ -229,3 +229,19 @@ class raw_env(AECEnv):
 
         if self.render_mode == "human":
             self.render()
+
+
+if __name__ == '__main__':
+    target_env =env(render_mode="human")
+    target_env.reset(seed=42)
+
+    for agent in target_env.agent_iter():
+        observation, reward, termination, truncation, info = target_env.last()
+        if termination or truncation:
+            action = None
+        else:
+            # this is where you would insert your policy
+            action = target_env.action_space(agent).sample()
+
+        target_env.step(action)
+    target_env.close()
