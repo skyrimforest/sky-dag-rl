@@ -27,6 +27,10 @@ class SkyDagEnv(ParallelEnv):
         self.node_config_path = node_config_path
         self.job_config_path = job_config_path
 
+        # 模拟源点和终点
+        self.source=None
+        self.destination=None
+
         # underlay状态
         self.nodes = {}
         self.grid_size = ()
