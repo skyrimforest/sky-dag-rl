@@ -1,4 +1,4 @@
-from dag_visualizer import visualize_env
+from sky_dag.env.Utils.dag_visualizer import visualize_env
 from sky_dag_env import SkyDagEnv
 
 # 已创建并 load_from_config 的环境

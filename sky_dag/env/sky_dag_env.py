@@ -1,87 +1,120 @@
-from typing import Dict
+from typing import Union
 
 from pettingzoo import ParallelEnv
-from pettingzoo.utils import parallel_to_aec
 import numpy as np
-from gymnasium import spaces
-from Node import Node
-from Job import Job
-from Operation import Operation
+
+from sky_dag.env.Agent.BaseAgent import BaseAgent
+from sky_dag.env.Graph.Node import Node
+from sky_dag.env.Graph.Job import Job
+from sky_dag.env.Graph.Operation import Operation
+from sky_dag.env.Scheduler.BaseScheduler import BaseScheduler,FixedScheduler
 import json
-from scheduler import RandomScheduler
-from sky_dag.env.scheduler import *
 
 
 class SkyDagEnv(ParallelEnv):
     metadata = {"render_modes": ["human"], "name": "sky_dag_env"}
 
-    def __init__(self, node_config_path="node_config.json", job_config_path="job_config.json"):
+    def __init__(self,
+                 node_config_path="node_config.json",
+                 job_config_path="job_config.json",
+                 assign_scheduler=None,
+                 graph_agent: BaseAgent = None,
+                 underlay_agent: BaseAgent = None,
+                 overlay_agent: BaseAgent = None,
+                 operation_agent: Union[BaseAgent, list] = None,
+                 node_agent: Union[BaseAgent, list] = None,
+                 ):
         self.node_config_path = node_config_path
         self.job_config_path = job_config_path
 
-        # underlay
+        # underlay状态
         self.nodes = {}
         self.grid_size = ()
 
-        # overlay
+        # overlay状态
         self.jobs = {}
         self.operations = []
-        self.pending_operations = []
 
-        # todo 表示传输时延
-        # self.pending_transfers = []  # (due_step, Operation)
-        self.step_count = 0
+        # 环境本身的状态
+        self.env_timeline = 0
+        self.reward=0
 
-        self.load_node_graph()
-        self.load_job_graph()
+        # 智能体相关的状态
+        self.graph_agent = None
+        self.underlay_agent = None
+        self.overlay_agent = None
+        self.operation_agents = []
+        self.node_agents = []
 
-        # 智能体
-        self.operation_agents=[]
-        self.node_agents=[]
-        self.under_agents=None
-        self.overlay_agents=None
+        # 调度器
+        self.scheduler = None
+        if assign_scheduler is None:
+            self.scheduler = FixedScheduler()  # 默认调度器，可替换
+        else:
+            self.set_scheduler(assign_scheduler)
+            self.scheduler = assign_scheduler
 
-        # 获得指派策略
-        self.scheduler = FixedScheduler()  # 默认调度器，可替换
+    # ---------- 自定义状态更新函数 ----------
+    def set_env_timeline(self, count):
+        assert count >= 0 and isinstance(count, int)
+        self.env_timeline = count
+
+    def get_env_timeline(self) -> int:
+        return self.env_timeline
 
     def set_scheduler(self, scheduler):
+        assert isinstance(scheduler, BaseScheduler)
+        self.scheduler = scheduler
+
+    def get_scheduler(self) -> str:
+        return self.scheduler.to_str()
+
+    # Scheduler的任务
+    # def assign_operations(self, job_assignment: Dict[str, str]):
+    #     """
+    #     job_assignment: {"op_1": "node_1", "op_2": "node_2", ...}
+    #     """
+    #     for job in self.jobs:
+    #         for op in job.operations:
+    #             if op.id in job_assignment:
+    #                 node_id = job_assignment[op.id]
+    #                 node = self.nodes[node_id]
+    #                 op.assign_to_node(node)
+
+    # Scheduler的任务
+    # def run_scheduling_cycle(self):
+    #     """
+    #     实际执行指派的结果
+    #     :return: None
+    #     """
+    #     assignment = self.scheduler.assign(self.jobs, self.nodes)
+    #     self.assign_operations(assignment)
+
+    def refresh_underlay(self):
         """
-        设置其他的调度器
-        :param scheduler:调度器
+        刷新当前环境的underlay
         :return:
         """
-        self.scheduler = scheduler
+        self.nodes.clear()
+
+    def refresh_overlay(self):
+        """
+        刷新当前环境的overlay
+        :return:
+        """
+        self.jobs.clear()
+        self.operations.clear()
 
     def clear_graph(self):
         """
         清空状态
         :return:None
         """
-        self.nodes.clear()
-        self.jobs.clear()
-        self.operations.clear()
-        self.pending_operations.clear()
-        # self.pending_transfers.clear()
-        self.step_count = 0
+        # ----------初始化图本身----------
+        self.refresh_overlay()
+        self.refresh_underlay()
 
-    def assign_operations(self, job_assignment: Dict[str, str]):
-        """
-        job_assignment: {"op_1": "node_1", "op_2": "node_2", ...}
-        """
-        for job in self.jobs:
-            for op in job.operations:
-                if op.id in job_assignment:
-                    node_id = job_assignment[op.id]
-                    node = self.nodes[node_id]
-                    op.assign_to_node(node)
-
-    def run_scheduling_cycle(self):
-        """
-        实际执行指派的结果
-        :return: None
-        """
-        assignment = self.scheduler.assign(self.jobs, self.nodes)
-        self.assign_operations(assignment)
+        print("Environment Initialized Successfully.")
 
     def load_node_graph(self):
         """
@@ -137,27 +170,6 @@ class SkyDagEnv(ParallelEnv):
         # 初始化待运行操作列表（那些已经准备好、没有未完成依赖的操作）
         self.pending_operations = [op for op in self.operations if op.is_ready()]
 
-    def create_env(self):
-        """
-        创建环境，加载节点和作业图，进行初始化操作
-        :return: None
-        """
-        self.clear_graph()  # 清空状态
-        self.load_node_graph()  # 加载物理节点
-        self.load_job_graph()  # 加载作业图
-
-        # 初始化待运行的操作
-        self.pending_operations = [op for op in self.operations if op.is_ready()]
-        self.step_count = 0
-
-        # 根据需要选择调度器，默认使用随机调度器
-        self.scheduler = FixedScheduler()
-
-        # 如果需要自定义调度器，可以使用 set_scheduler
-        # self.set_scheduler(CustomScheduler())
-
-        print("Environment Initialized Successfully.")
-
     def step(self, actions=None):
         """
         执行一步仿真逻辑。当前版本为纯仿真环境，不包含 agent 与动作，op 自动分配到 node 上执行。
@@ -189,7 +201,7 @@ class SkyDagEnv(ParallelEnv):
                         self.pending_operations.append(next_op)
 
         # === 3. 步数更新 ===
-        self.step_count += 1
+        self.set_env_timeline(self.env_timeline+1)
 
         # === 4. 构造返回值 ===
         obs = self._get_obs()
@@ -224,19 +236,21 @@ class SkyDagEnv(ParallelEnv):
         :param options:选项
         :return:
         """
+        # ---------- 清理阶段 ----------
+        self.set_env_timeline(0)
         self.clear_graph()
+        # ---------- 重建阶段 ----------
         self.load_node_graph()
         self.load_job_graph()
         obs = self._get_obs()
         return obs
 
-    # todo
     def render(self):
         """
         给出观察的渲染结果
         :return:
         """
-        print(f"\n=== Step {self.step_count} | Grid State ===")
+        print(f"\n=== Step {self.get_env_timeline()} | Grid State ===")
         for name, node in self.nodes.items():
             print(f"{name} at {node.position}: {len(node.running_operations)} ops running")
 
@@ -260,3 +274,9 @@ class SkyDagEnv(ParallelEnv):
         print("\n[待运行操作]")
         for op in self.pending_operations:
             print(f"  Operation {op.id} - State: {op.state}")
+
+    def observation_space(self, agent):
+        return self.observation_spaces[agent]
+
+    def action_space(self, agent):
+        return self.action_spaces[agent]

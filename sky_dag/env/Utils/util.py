@@ -168,5 +168,5 @@ if __name__ == '__main__':
     # 组合当前工作目录和表示上级目录的字符串
     file_path = os.path.join(os.getcwd(), os.pardir, os.pardir, "dataset/fjsp-instances/barnes/mt10c1.txt")
     json_data = read_file_and_create_json(file_path)
-    with open('output.json', 'w') as json_file:
+    with open('../examples/output.json', 'w') as json_file:
         json.dump(json_data, json_file, indent=4)

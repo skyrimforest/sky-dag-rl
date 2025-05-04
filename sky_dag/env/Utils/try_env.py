@@ -1,4 +1,4 @@
-from scheduler import RandomScheduler
+from Scheduler import RandomScheduler
 from sky_dag_env import SkyDagEnv
 
 def main():
