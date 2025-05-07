@@ -8,7 +8,7 @@ from sky_dag.env.Graph.Node import Node
 from sky_dag.env.Graph.Job import Job
 from sky_dag.env.Graph.Operation import Operation
 from sky_dag.env.Scheduler.BaseScheduler import BaseScheduler,FixedScheduler
-from sky_dag.env.Event.Event import Event
+from sky_dag.env.Event.Event import Event,EventQueue
 import json
 
 
@@ -43,6 +43,7 @@ class SkyDagEnv(ParallelEnv):
         # 环境本身的状态 带宽等
         self.env_timeline = 0
         self.reward=0
+        self.event_queue = EventQueue()
 
         # 智能体相关的状态
         self.graph_agent = None
@@ -152,33 +153,31 @@ class SkyDagEnv(ParallelEnv):
 
             self.jobs[job.id] = job  # 存储 Job 对象，确保是 Job 类型
 
+    def deal_event(self,event_list):
+        for event in event_list:
+            if event.event_type == "just_test":
+                print(event.payload)
+            elif event.event_type == "task_finish":
+                op = event.payload
+            elif event.event_type == "machine_fail":
+                for node_id in event.payload['nodes']:
+                    self.nodes[node_id].fail()
+
     def step(self, actions=None):
         rewards = {}
         terminations = {}
         truncations = {}
         infos = {}
 
-        # === 0. 处理 EventQueue 中的事件 ===
-        for event in self.event_queue.pop_ready_events(self.env_timeline):
-            if event.event_type == "task_finish":
-                op = event.payload
-                for next_op in op.successors:
-                    next_op.input_queue.append("trigger")
-                    next_op.mark_dependency_finished(op.id)
-                    if next_op.is_ready():
-                        self.pending_operations.append(next_op)
-            elif event.event_type == "machine_fail":
-                node = event.payload
-                node.fail()
+        # === 0. Agent 动作处理（支持 Job 或 Central）===
+        if actions:
+            self._apply_agent_actions(actions)
 
-        # === 1. 将 ready 且 idle 的 Operation 尝试分配 packet 开始处理 ===
-        for op in self.pending_operations[:]:  # 拷贝列表防止修改冲突
-            if op.state in ["idle", "ready"] and op.is_ready() and op.input_queue:
-                op.input_queue.pop(0)  # 取出一个启动信号
-                op.start_processing(self.env_timeline)
-                self.pending_operations.remove(op)
+        # === 1. 处理 EventQueue 中的事件 ===
+        current_event_list = self.event_queue.pop_ready_events(self.env_timeline)
+        self.deal_event(current_event_list)
 
-        # === 2. 推进每个 Node 上的 Operation 执行 ===
+        # === 2. 推进所有 Node 中操作的执行 ===
         for node in self.nodes.values():
             finished_ops = node.step(self.env_timeline)
             for op in finished_ops:
@@ -188,19 +187,24 @@ class SkyDagEnv(ParallelEnv):
                     payload=op
                 ))
 
-        # === 3. 检查每个 Job 是否完成，给予奖励 ===
+        # === 3. 统计 Job 完成状态，计算奖励 ===
         for job in self.jobs:
             done = job.is_finished()
-            rewards[job.id] = 1.0 if done and not self.done_flags[job.id] else 0.0
-            terminations[job.id] = done
-            truncations[job.id] = False
-            infos[job.id] = {}
+            job_id = job.id
+            rewards[job_id] = 1.0 if done and not self.done_flags.get(job_id, False) else 0.0
+            terminations[job_id] = done
+            truncations[job_id] = False
+            infos[job_id] = {}
             if done:
-                self.done_flags[job.id] = True
+                self.done_flags[job_id] = True
 
         # === 4. 推进时间 ===
         self.env_timeline += 1
         obs = self._get_obs()
+
+        # === 5. 判断是否需要自动重调度 ===
+        if self.should_trigger_reassign():
+            self.reschedule_operations()
 
         return obs, rewards, terminations, truncations, infos
 
@@ -263,11 +267,49 @@ class SkyDagEnv(ParallelEnv):
                     f"  Operation {op.id} - State: {op.state}, Assigned Node: {op.assigned_node.id if op.assigned_node else 'None'}")
 
         print("\n[待运行操作]")
-        for op in self.pending_operations:
-            print(f"  Operation {op.id} - State: {op.state}")
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
 
     def action_space(self, agent):
         return self.action_spaces[agent]
+
+    def should_trigger_reassign(self):
+        pass
+
+    def reschedule_operations(self):
+        pass
+
+    def get_op_by_id(self, op_id):
+        for job in self.jobs:
+            for op in job.operations:
+                if op.id == op_id:
+                    return op
+        return None
+
+    def _apply_agent_actions(self, actions):
+        """
+        执行 agent 提供的动作，支持集中式与 Job 式调度。
+        actions 格式：
+            - job-based: {"job_id1": {"op_id": "op1", "target_node": "node1"}, ...}
+            - centralized: {"scheduler": [{"op_id": "op1", "target_node": "node1"}, ...]}
+        """
+        if "scheduler" in actions:
+            # Centralized Scheduler 模式
+            for assignment in actions["scheduler"]:
+                op = self.get_op_by_id(assignment["op_id"])
+                node = self.nodes.get(assignment["target_node"])
+                if op and node and op.state == "idle" and node.can_accept(op):
+                    node.assign_operation(op)
+                    if op in self.pending_operations:
+                        self.pending_operations.remove(op)
+        else:
+            # Job Agents 独立调度
+            for job_id, assignment in actions.items():
+                op = self.get_op_by_id(assignment["op_id"])
+                node = self.nodes.get(assignment["target_node"])
+                if op and node and op.state == "idle" and node.can_accept(op):
+                    node.assign_operation(op)
+                    if op in self.pending_operations:
+                        self.pending_operations.remove(op)
+

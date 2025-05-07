@@ -1,8 +1,16 @@
+from enum import Enum
+
+# 定义一个枚举类
+class EventType(Enum):
+    just_test=0
+    task_finish = 1
+    machine_fail = 2
+
 class Event:
     def __init__(self, timestamp, event_type, payload):
         self.timestamp = timestamp  # 事件发生的时间
         self.event_type = event_type  # 如 'task_finish', 'machine_fail'
-        self.payload = payload  # 可以是 Operation 或 Job 等对象
+        self.payload = payload  # json对象 不同事件请自行携带不同负载
 
 class EventQueue:
     def __init__(self):
