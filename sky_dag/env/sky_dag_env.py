@@ -8,6 +8,7 @@ from sky_dag.env.Graph.Node import Node
 from sky_dag.env.Graph.Job import Job
 from sky_dag.env.Graph.Operation import Operation
 from sky_dag.env.Scheduler.BaseScheduler import BaseScheduler,FixedScheduler
+from sky_dag.env.Event.Event import Event
 import json
 
 
@@ -31,15 +32,15 @@ class SkyDagEnv(ParallelEnv):
         self.source=None
         self.destination=None
 
-        # underlay状态
+        # underlay图状态
         self.nodes = {}
         self.grid_size = ()
 
-        # overlay状态
+        # overlay图状态
         self.jobs = {}
         self.operations = []
 
-        # 环境本身的状态
+        # 环境本身的状态 带宽等
         self.env_timeline = 0
         self.reward=0
 
@@ -72,27 +73,6 @@ class SkyDagEnv(ParallelEnv):
 
     def get_scheduler(self) -> str:
         return self.scheduler.to_str()
-
-    # Scheduler的任务
-    # def assign_operations(self, job_assignment: Dict[str, str]):
-    #     """
-    #     job_assignment: {"op_1": "node_1", "op_2": "node_2", ...}
-    #     """
-    #     for job in self.jobs:
-    #         for op in job.operations:
-    #             if op.id in job_assignment:
-    #                 node_id = job_assignment[op.id]
-    #                 node = self.nodes[node_id]
-    #                 op.assign_to_node(node)
-
-    # Scheduler的任务
-    # def run_scheduling_cycle(self):
-    #     """
-    #     实际执行指派的结果
-    #     :return: None
-    #     """
-    #     assignment = self.scheduler.assign(self.jobs, self.nodes)
-    #     self.assign_operations(assignment)
 
     def refresh_underlay(self):
         """
@@ -127,7 +107,7 @@ class SkyDagEnv(ParallelEnv):
         """
         with open(self.node_config_path, 'r') as f:
             config = json.load(f)
-        for node_cfg in config['nodes']:
+        for node_cfg in config.get('nodes', []):
             node = Node(
                 node_id=node_cfg['id'],
                 position=tuple(node_cfg['position']),
@@ -147,8 +127,8 @@ class SkyDagEnv(ParallelEnv):
         with open(self.job_config_path, 'r') as f:
             config = json.load(f)
 
-        for job_cfg in config['jobs']:
-            job = Job(job_cfg['id'])  # 确保创建的是 Job 实例
+        for job_cfg in config.get('jobs', []):
+            job = Job(job_cfg['id'],job_cfg['target_count'])
             op_dict = {}
 
             # 创建 operation 实例并加入 job
@@ -167,53 +147,60 @@ class SkyDagEnv(ParallelEnv):
             for dep in job_cfg.get('dependencies', []):
                 from_op = op_dict[dep['from']]
                 to_op = op_dict[dep['to']]
+                from_op.add_dependency(to_op)
                 to_op.add_dependency(from_op)
 
             self.jobs[job.id] = job  # 存储 Job 对象，确保是 Job 类型
 
-        # 初始化待运行操作列表（那些已经准备好、没有未完成依赖的操作）
-        self.pending_operations = [op for op in self.operations if op.is_ready()]
-
     def step(self, actions=None):
-        """
-        执行一步仿真逻辑。当前版本为纯仿真环境，不包含 agent 与动作，op 自动分配到 node 上执行。
-        :param actions: None（非 RL 模式）
-        :return: obs, rewards, terminations, truncations, infos
-        """
         rewards = {}
         terminations = {}
         truncations = {}
         infos = {}
 
-        # === 1. 分配待调度的操作到可用节点 ===
-        for op in self.pending_operations[:]:  # 拷贝列表避免循环中修改
-            for node in self.nodes.values():
-                if node.assign_operation(op):  # 成功分配则移除
-                    self.pending_operations.remove(op)
-                    break
-
-        # === 2. 推进每个节点上的操作执行 ===
-        for node in self.nodes.values():
-            finished_ops = node.step()  # 返回已完成的操作列表
-
-            for op in finished_ops:
-                # 更新其后继操作的依赖状态
+        # === 0. 处理 EventQueue 中的事件 ===
+        for event in self.event_queue.pop_ready_events(self.env_timeline):
+            if event.event_type == "task_finish":
+                op = event.payload
                 for next_op in op.successors:
+                    next_op.input_queue.append("trigger")
                     next_op.mark_dependency_finished(op.id)
-                    # 若下一个操作就绪则加入待调度队列
                     if next_op.is_ready():
                         self.pending_operations.append(next_op)
+            elif event.event_type == "machine_fail":
+                node = event.payload
+                node.fail()
 
-        # === 3. 步数更新 ===
-        self.set_env_timeline(self.env_timeline+1)
+        # === 1. 将 ready 且 idle 的 Operation 尝试分配 packet 开始处理 ===
+        for op in self.pending_operations[:]:  # 拷贝列表防止修改冲突
+            if op.state in ["idle", "ready"] and op.is_ready() and op.input_queue:
+                op.input_queue.pop(0)  # 取出一个启动信号
+                op.start_processing(self.env_timeline)
+                self.pending_operations.remove(op)
 
-        # === 4. 构造返回值 ===
+        # === 2. 推进每个 Node 上的 Operation 执行 ===
+        for node in self.nodes.values():
+            finished_ops = node.step(self.env_timeline)
+            for op in finished_ops:
+                self.event_queue.add_event(Event(
+                    timestamp=self.env_timeline,
+                    event_type="task_finish",
+                    payload=op
+                ))
+
+        # === 3. 检查每个 Job 是否完成，给予奖励 ===
+        for job in self.jobs:
+            done = job.is_finished()
+            rewards[job.id] = 1.0 if done and not self.done_flags[job.id] else 0.0
+            terminations[job.id] = done
+            truncations[job.id] = False
+            infos[job.id] = {}
+            if done:
+                self.done_flags[job.id] = True
+
+        # === 4. 推进时间 ===
+        self.env_timeline += 1
         obs = self._get_obs()
-        for agent in self.agents:
-            rewards[agent] = 0.0  # 你可以根据实际逻辑修改为奖励函数
-            terminations[agent] = self._check_done(agent)  # 可选：某个 node 完成所有任务
-            truncations[agent] = False  # 暂无截断逻辑
-            infos[agent] = {}
 
         return obs, rewards, terminations, truncations, infos
 

@@ -1,5 +1,5 @@
 class Operation:
-    def __init__(self, op_id, cpu_req, mem_req, speed):
+    def __init__(self, op_id, cpu_req, mem_req,duration=100):
         # operation本身的属性
         self.id = op_id
         self.cpu_req = cpu_req
@@ -9,7 +9,9 @@ class Operation:
         self.state = "blocked"
         self.progress = 0.0
         self.dependencies = []
+        self.successors = []
         self.assigned_node = None
+        self.duration = duration # 当前产品需要加工的进度条
 
         # operation处理item相关的状态
         self.processed_item_list = []
@@ -25,6 +27,14 @@ class Operation:
         :return:
         """
         self.dependencies.append(op)
+
+    def add_successor(self, op):
+        """
+        添加依赖节点
+        :param op:
+        :return:
+        """
+        self.successors.append(op)
 
     def is_ready(self):
         return all(dep.state == "finished" for dep in self.dependencies)
@@ -101,7 +111,6 @@ class Operation:
                 self.current_progress = 0.0
                 self.current_start_time = env_time
                 self.state = "active"
-                self.current_packet = packet
             else:
                 return None  # 无输入继续等待
 
@@ -110,7 +119,7 @@ class Operation:
             self.current_progress += node_speed
 
             # 加工完成
-            if self.current_progress >= 100:
+            if self.current_progress >= self.duration:
                 self.processed_item_list.append({
                     "start_time": self.current_start_time,
                     "end_time": env_time,
