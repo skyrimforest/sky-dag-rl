@@ -3,11 +3,10 @@ from typing import Union
 from pettingzoo import ParallelEnv
 import numpy as np
 
-from sky_dag.env.Agent.BaseAgent import BaseAgent
+from sky_dag.Agent import BaseAgent
 from sky_dag.env.Graph.Node import Node
 from sky_dag.env.Graph.Job import Job
 from sky_dag.env.Graph.Operation import Operation
-from sky_dag.env.Scheduler.BaseScheduler import BaseScheduler,FixedScheduler
 from sky_dag.env.Event.Event import Event,EventQueue
 import json
 
@@ -52,14 +51,6 @@ class SkyDagEnv(ParallelEnv):
         self.operation_agents = []
         self.node_agents = []
 
-        # 调度器
-        self.scheduler = None
-        if assign_scheduler is None:
-            self.scheduler = FixedScheduler()  # 默认调度器，可替换
-        else:
-            self.set_scheduler(assign_scheduler)
-            self.scheduler = assign_scheduler
-
     # ---------- 自定义状态更新函数 ----------
     def set_env_timeline(self, count):
         assert count >= 0 and isinstance(count, int)
@@ -67,13 +58,6 @@ class SkyDagEnv(ParallelEnv):
 
     def get_env_timeline(self) -> int:
         return self.env_timeline
-
-    def set_scheduler(self, scheduler):
-        assert isinstance(scheduler, BaseScheduler)
-        self.scheduler = scheduler
-
-    def get_scheduler(self) -> str:
-        return self.scheduler.to_str()
 
     def refresh_underlay(self):
         """
@@ -169,15 +153,19 @@ class SkyDagEnv(ParallelEnv):
         truncations = {}
         infos = {}
 
-        # === 0. Agent 动作处理（支持 Job 或 Central）===
+        # === 0. 处理全局时间 ===
+        self.env_timeline += 1
+        obs = self._get_obs()
+
+        # === 1. Agent 动作处理（支持 Job 或 Central）===
         if actions:
             self._apply_agent_actions(actions)
 
-        # === 1. 处理 EventQueue 中的事件 ===
+        # === 2. 处理 EventQueue 中的事件 ===
         current_event_list = self.event_queue.pop_ready_events(self.env_timeline)
         self.deal_event(current_event_list)
 
-        # === 2. 推进所有 Node 中操作的执行 ===
+        # === 3. 提取state,发送给状态转移函数并返回 ===
         for node in self.nodes.values():
             finished_ops = node.step(self.env_timeline)
             for op in finished_ops:
@@ -187,7 +175,7 @@ class SkyDagEnv(ParallelEnv):
                     payload=op
                 ))
 
-        # === 3. 统计 Job 完成状态，计算奖励 ===
+        # === 4. 统计 Job 完成状态，计算奖励 ===
         for job in self.jobs:
             done = job.is_finished()
             job_id = job.id
@@ -198,9 +186,7 @@ class SkyDagEnv(ParallelEnv):
             if done:
                 self.done_flags[job_id] = True
 
-        # === 4. 推进时间 ===
-        self.env_timeline += 1
-        obs = self._get_obs()
+
 
         # === 5. 判断是否需要自动重调度 ===
         if self.should_trigger_reassign():
